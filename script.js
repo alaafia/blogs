@@ -1,23 +1,41 @@
 const FEED_URL = "https://medium.com/feed/@aichalaafia1";
-const container = document.getElementById("blogs-carousel");
+const grid = document.getElementById("blogs-grid");
 
 fetch(`https://api.rss2json.com/v1/api.json?rss_url=${FEED_URL}`)
   .then(res => res.json())
   .then(data => {
     data.items.forEach(item => {
-      const card = document.createElement("div");
-      card.className = "card";
+      const article = document.createElement("div");
+      article.className = "article";
 
-      const date = new Date(item.pubDate).getFullYear();
+      const image = item.thumbnail
+        ? `<img src="${item.thumbnail}" alt="">`
+        : "";
 
-      card.innerHTML = `
-        <h3>${item.title}</h3>
-        <p>${item.description.replace(/<[^>]*>/g, "").slice(0, 120)}...</p>
-        <a href="${item.link}" target="_blank">
-          Read on Medium (${date})
-        </a>
+      const text = item.description
+        .replace(/<[^>]*>/g, "")
+        .slice(0, 160);
+
+      const date = new Date(item.pubDate).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+
+      article.innerHTML = `
+        ${image}
+        <h2>${item.title}</h2>
+        <p>${text}...</p>
+        <div class="article-meta">${date}</div>
       `;
 
-      container.appendChild(card);
+      article.onclick = () => {
+        window.open(item.link, "_blank");
+      };
+
+      grid.appendChild(article);
     });
+  })
+  .catch(() => {
+    grid.innerHTML = "<p>Unable to load articles.</p>";
   });
