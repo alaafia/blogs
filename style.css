@@ -997,6 +997,90 @@ button {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   MEDIUM CTA  (bottom of main — always visible)
+══════════════════════════════════════════════════════════════════ */
+.medium-cta {
+  position: relative;
+  margin: 4rem 0 0;
+  padding: 4rem 2rem;
+  text-align: center;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  overflow: hidden;
+}
+
+/* Radial accent glow behind the content */
+.medium-cta__glow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 70% 60% at 50% 100%, var(--c-accent-glow), transparent);
+  pointer-events: none;
+}
+
+.medium-cta__eyebrow {
+  font-family: var(--f-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-accent);
+  margin-bottom: 0.875rem;
+}
+
+.medium-cta__title {
+  font-family: var(--f-display);
+  font-size: clamp(1.5rem, 3.5vw, 2.25rem);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--c-text);
+  margin-bottom: 0.875rem;
+}
+
+.medium-cta__sub {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--c-muted);
+  max-width: 480px;
+  margin: 0 auto 2rem;
+}
+
+.medium-cta__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--f-body);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--c-accent-text);
+  background: var(--c-accent);
+  padding: 0.8rem 2rem;
+  border-radius: var(--r-pill);
+  transition: opacity var(--t-fast), transform var(--t-fast), box-shadow var(--t-fast);
+  box-shadow: 0 4px 20px var(--c-accent-dim);
+}
+
+.medium-cta__btn:hover {
+  opacity: 0.88;
+  transform: translateY(-3px);
+  box-shadow: 0 8px 28px var(--c-accent-dim);
+}
+
+.medium-cta__btn:focus-visible {
+  outline: 2px solid var(--c-border-focus);
+  outline-offset: 3px;
+}
+
+.medium-cta__btn svg {
+  transition: transform var(--t-fast);
+}
+
+.medium-cta__btn:hover svg {
+  transform: translate(2px, -2px);
+}
+
+/* ═══════════════════════════════════════════════════════════════
    LIGHT THEME
    Applied when <html data-theme="light"> (set by JS from localStorage
    or prefers-color-scheme; inline script prevents any flash).
