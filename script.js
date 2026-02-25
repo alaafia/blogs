@@ -1,60 +1,447 @@
-const FEED_URL = "https://medium.com/feed/@aichalaafia1";
-const grid = document.getElementById("blogs-grid");
+/**
+ * Aicha Laafia — Blog
+ * Fetches articles from Medium RSS feed and renders them.
+ *
+ * Fetch strategy (in order):
+ *   1. rss2json   — returns clean JSON, includes thumbnail & categories
+ *   2. allorigins — returns raw RSS/XML as fallback
+ */
 
-fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(FEED_URL)}`)
-  .then(res => res.text())
-  .then(xml => {
+(() => {
+  'use strict';
+
+  // ─── Configuration ──────────────────────────────────────────────────────────
+
+  const MEDIUM_USERNAME = 'aichalaafia1';
+  const FEED_URL        = `https://medium.com/feed/@${MEDIUM_USERNAME}`;
+  const FETCH_TIMEOUT   = 12_000; // ms
+
+  // ─── DOM references ─────────────────────────────────────────────────────────
+
+  const featuredSection = document.getElementById('featured-section');
+  const skeletonFeatured = document.getElementById('skeleton-featured');
+  const gridSection     = document.getElementById('grid-section');
+  const articlesGrid    = document.getElementById('articles-grid');
+  const articleCountEl  = document.getElementById('article-count-text');
+  const errorState      = document.getElementById('error-state');
+  const emptyState      = document.getElementById('empty-state');
+  const retryBtn        = document.getElementById('retry-btn');
+  const footerYear      = document.getElementById('footer-year');
+
+  // ─── Boot ───────────────────────────────────────────────────────────────────
+
+  if (footerYear) footerYear.textContent = new Date().getFullYear();
+
+  // ─── Fetch helpers ──────────────────────────────────────────────────────────
+
+  function withTimeout(promise, ms) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    // The signal is already passed inside each fetch call; here we just
+    // race the promise against a rejection after `ms` ms.
+    const timer = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Request timed out')), ms)
+    );
+    return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+  }
+
+  /**
+   * Primary: rss2json API (clean JSON, thumbnail already extracted).
+   * Returns an array of normalised article objects or throws.
+   */
+  async function fetchViaRss2Json() {
+    const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(FEED_URL)}`;
+    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
+    const data = await res.json();
+    if (data.status !== 'ok' || !Array.isArray(data.items)) {
+      throw new Error('rss2json returned unexpected payload');
+    }
+    return data.items.map(normaliseRss2JsonItem);
+  }
+
+  /**
+   * Fallback: allorigins proxy, returns raw RSS XML which we parse ourselves.
+   */
+  async function fetchViaAllorigins() {
+    const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(FEED_URL)}`;
+    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    if (!res.ok) throw new Error(`allorigins HTTP ${res.status}`);
+    const xml  = await res.text();
+    return parseRSSXML(xml);
+  }
+
+  async function fetchArticles() {
+    try {
+      return await fetchViaRss2Json();
+    } catch (err) {
+      console.warn('[Blog] rss2json failed — falling back to allorigins.', err.message);
+      return await fetchViaAllorigins();
+    }
+  }
+
+  // ─── Normalisers ────────────────────────────────────────────────────────────
+
+  /**
+   * rss2json already does the heavy lifting.
+   * Field names: title, pubDate, link, author, thumbnail, description, content, categories[]
+   */
+  function normaliseRss2JsonItem(item) {
+    return {
+      title:      item.title       || '',
+      link:       item.link        || '',
+      pubDate:    item.pubDate     || '',
+      thumbnail:  item.thumbnail   || '',
+      description: item.description || '',
+      content:    item.content     || '',
+      categories: Array.isArray(item.categories) ? item.categories : [],
+    };
+  }
+
+  /**
+   * Parse raw RSS XML into the same normalised shape.
+   */
+  function parseRSSXML(xml) {
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xml, "application/xml");
-    const items = doc.querySelectorAll("item");
+    const doc    = parser.parseFromString(xml, 'application/xml');
 
-    items.forEach(item => {
-      const title = item.querySelector("title")?.textContent || "";
-      const link = item.querySelector("link")?.textContent || "";
+    // Graceful parse-error check
+    const parseErr = doc.querySelector('parsererror');
+    if (parseErr) throw new Error('RSS XML parse error');
 
-      const date = new Date(
-        item.querySelector("pubDate")?.textContent
-      ).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-      });
+    return Array.from(doc.querySelectorAll('item')).map(item => {
+      const title   = item.querySelector('title')?.textContent?.trim()   || '';
+      const link    = item.querySelector('link')?.textContent?.trim()    || '';
+      const pubDate = item.querySelector('pubDate')?.textContent?.trim() || '';
+      const categories = Array.from(item.querySelectorAll('category'))
+                              .map(c => c.textContent.trim())
+                              .filter(Boolean);
 
-      // 1️⃣ IMAGE: try media:thumbnail first
-      let image = item.querySelector("media\\:thumbnail")?.getAttribute("url");
+      // content:encoded holds the full article HTML
+      const contentEl = item.querySelector('content\\:encoded') ||
+                        item.querySelector('encoded');
+      const content   = contentEl?.textContent || '';
 
-      // 2️⃣ fallback: extract first img from content
-      const contentEncoded =
-        item.querySelector("content\\:encoded")?.textContent || "";
-
-      if (!image && contentEncoded) {
-        const imgMatch = contentEncoded.match(/<img[^>]+src="([^">]+)"/);
-        if (imgMatch) image = imgMatch[1];
+      // Cover image: media:thumbnail first, then first <img> in content
+      let thumbnail = item.querySelector('media\\:thumbnail, thumbnail')
+                          ?.getAttribute('url') || '';
+      if (!thumbnail && content) {
+        const m = content.match(/<img[^>]+src=["']([^"']+)["']/);
+        if (m) thumbnail = m[1];
       }
 
-      // 3️⃣ TEXT
-      const text = contentEncoded
-        .replace(/<[^>]*>/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 180);
-
-      const article = document.createElement("article");
-      article.className = "article";
-
-      article.innerHTML = `
-        ${image ? `<img src="${image}" alt="">` : ""}
-        <h2>${title}</h2>
-        <p>${text || "Read the full article on Medium."}</p>
-        <div class="article-meta">${date}</div>
-      `;
-
-      article.onclick = () => window.open(link, "_blank");
-
-      grid.appendChild(article);
+      return { title, link, pubDate, thumbnail, description: '', content, categories };
     });
-  })
-  .catch(err => {
-    console.error(err);
-    grid.innerHTML = "<p>Unable to load articles.</p>";
+  }
+
+  // ─── Text utilities ─────────────────────────────────────────────────────────
+
+  function stripHTML(html) {
+    return html
+      .replace(/<figure[\s\S]*?<\/figure>/gi, '') // remove images + captions
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g,  '&')
+      .replace(/&lt;/g,   '<')
+      .replace(/&gt;/g,   '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#039;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function escapeHTML(str) {
+    return String(str)
+      .replace(/&/g,  '&amp;')
+      .replace(/</g,  '&lt;')
+      .replace(/>/g,  '&gt;')
+      .replace(/"/g,  '&quot;');
+  }
+
+  function getExcerpt(item, maxLen) {
+    // rss2json description is a short HTML excerpt
+    let text = item.description ? stripHTML(item.description) : '';
+
+    // Fall back to full content
+    if (text.length < 40 && item.content) {
+      text = stripHTML(item.content);
+    }
+
+    // Skip if still just the title echoed back
+    if (text.toLowerCase().startsWith(item.title.toLowerCase())) {
+      text = text.slice(item.title.length).trim().replace(/^[:—–\s]+/, '');
+    }
+
+    return text.length > maxLen
+      ? text.slice(0, maxLen).replace(/\s+\S*$/, '') + '\u2026' // ellipsis
+      : text;
+  }
+
+  function readingTime(item) {
+    const raw   = item.content || item.description || '';
+    const words = stripHTML(raw).trim().split(/\s+/).filter(Boolean).length;
+    const mins  = Math.max(1, Math.ceil(words / 200));
+    return `${mins}\u202Fmin read`;
+  }
+
+  function formatDate(dateStr) {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-US', {
+      month: 'short',
+      day:   'numeric',
+      year:  'numeric',
+    });
+  }
+
+  // ─── HTML builders ──────────────────────────────────────────────────────────
+
+  function pillsHTML(categories) {
+    if (!categories.length) return '';
+    const pills = categories
+      .slice(0, 3)
+      .map(c => `<span class="pill">${escapeHTML(c)}</span>`)
+      .join('');
+    return `<div class="article-pills">${pills}</div>`;
+  }
+
+  function coverImgHTML(item, className, fallbackClass, minH) {
+    if (item.thumbnail) {
+      return `<img
+        class="${className}"
+        src="${escapeHTML(item.thumbnail)}"
+        alt="${escapeHTML(item.title)}"
+        loading="lazy"
+        decoding="async"
+      />`;
+    }
+    return `<div class="${fallbackClass}" style="min-height:${minH}" aria-hidden="true">✦</div>`;
+  }
+
+  // ─── Render: featured card ───────────────────────────────────────────────────
+
+  function renderFeatured(item) {
+    const excerpt = getExcerpt(item, 300);
+    const date    = formatDate(item.pubDate);
+    const rt      = readingTime(item);
+    const href    = escapeHTML(item.link || '#');
+
+    const el = document.createElement('a');
+    el.className = 'featured-card';
+    el.href      = item.link || '#';
+    el.target    = '_blank';
+    el.rel       = 'noopener noreferrer';
+    el.setAttribute('aria-label', `Read "${item.title}" on Medium`);
+
+    el.innerHTML = `
+      <div class="featured-card__body">
+        <div class="featured-badge">Featured</div>
+        ${pillsHTML(item.categories)}
+        <h2 class="featured-card__title">${escapeHTML(item.title)}</h2>
+        ${excerpt ? `<p class="featured-card__excerpt">${escapeHTML(excerpt)}</p>` : ''}
+        <div class="featured-card__footer">
+          <div class="article-meta">
+            ${date ? `<span>${date}</span><span class="meta-dot" aria-hidden="true"></span>` : ''}
+            <span>${rt}</span>
+          </div>
+          <span class="read-link" aria-hidden="true">
+            Read Article
+            <span class="read-link__arrow">&#x2197;</span>
+          </span>
+        </div>
+      </div>
+      <div class="featured-card__img-wrap">
+        ${coverImgHTML(item, 'featured-card__img', 'featured-card__img-fallback', '360px')}
+      </div>
+    `;
+
+    return el;
+  }
+
+  // ─── Render: grid card ───────────────────────────────────────────────────────
+
+  function renderCard(item, index) {
+    const excerpt = getExcerpt(item, 160);
+    const date    = formatDate(item.pubDate);
+    const rt      = readingTime(item);
+
+    const el = document.createElement('a');
+    el.className = 'article-card';
+    el.href      = item.link || '#';
+    el.target    = '_blank';
+    el.rel       = 'noopener noreferrer';
+    el.setAttribute('role', 'listitem');
+    el.setAttribute('aria-label', `Read "${item.title}" on Medium`);
+
+    // Stagger entrance delay per card
+    el.style.transitionDelay = `${index * 75}ms`;
+
+    el.innerHTML = `
+      <div class="card__img-wrap">
+        ${coverImgHTML(item, 'card__img', 'card__img-fallback', 'auto')}
+      </div>
+      <div class="card__body">
+        ${pillsHTML(item.categories)}
+        <h3 class="card__title">${escapeHTML(item.title)}</h3>
+        ${excerpt ? `<p class="card__excerpt">${escapeHTML(excerpt)}</p>` : ''}
+        <div class="card__footer">
+          <span class="card__meta">${date}${date && rt ? ' \u00B7 ' : ''}${rt}</span>
+          <span class="card__arrow" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M2 12L12 2M12 2H5M12 2V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+        </div>
+      </div>
+    `;
+
+    return el;
+  }
+
+  // ─── IntersectionObserver for scroll-triggered card entrances ───────────────
+
+  const io = new IntersectionObserver(
+    entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          io.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.07, rootMargin: '0px 0px -30px 0px' }
+  );
+
+  // ─── UI state helpers ────────────────────────────────────────────────────────
+
+  function clearSkeletons() {
+    skeletonFeatured?.remove();
+    articlesGrid.innerHTML = '';
+  }
+
+  function setCount(text) {
+    if (articleCountEl) articleCountEl.textContent = text;
+  }
+
+  function showError() {
+    clearSkeletons();
+    gridSection.hidden = true;
+    errorState.hidden  = false;
+    setCount('Failed to load articles');
+  }
+
+  function showEmpty() {
+    clearSkeletons();
+    gridSection.hidden = true;
+    emptyState.hidden  = false;
+    setCount('No articles yet');
+  }
+
+  function restoreSkeletons() {
+    // Re-inject featured skeleton
+    featuredSection.innerHTML = `
+      <div class="skeleton-featured" id="skeleton-featured" aria-hidden="true">
+        <div class="skeleton-featured__content">
+          <div class="sk sk--tag"></div>
+          <div class="sk sk--title"></div>
+          <div class="sk sk--title sk--short"></div>
+          <div class="sk sk--text"></div>
+          <div class="sk sk--text sk--mid"></div>
+          <div class="sk sk--meta"></div>
+        </div>
+        <div class="skeleton-featured__img"></div>
+      </div>
+    `;
+
+    articlesGrid.innerHTML = `
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-card__img"></div>
+        <div class="skeleton-card__body">
+          <div class="sk sk--tag"></div>
+          <div class="sk sk--title"></div>
+          <div class="sk sk--title sk--short"></div>
+          <div class="sk sk--text"></div>
+          <div class="sk sk--meta"></div>
+        </div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-card__img"></div>
+        <div class="skeleton-card__body">
+          <div class="sk sk--tag"></div>
+          <div class="sk sk--title"></div>
+          <div class="sk sk--title sk--short"></div>
+          <div class="sk sk--text"></div>
+          <div class="sk sk--meta"></div>
+        </div>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <div class="skeleton-card__img"></div>
+        <div class="skeleton-card__body">
+          <div class="sk sk--tag"></div>
+          <div class="sk sk--title"></div>
+          <div class="sk sk--title sk--short"></div>
+          <div class="sk sk--text"></div>
+          <div class="sk sk--meta"></div>
+        </div>
+      </div>
+    `;
+
+    gridSection.hidden = false;
+    setCount('Loading articles\u2026');
+  }
+
+  // ─── Main render ─────────────────────────────────────────────────────────────
+
+  function render(items) {
+    if (!items || items.length === 0) {
+      showEmpty();
+      return;
+    }
+
+    clearSkeletons();
+
+    // Featured: first article
+    const featured = renderFeatured(items[0]);
+    featuredSection.appendChild(featured);
+
+    // Grid: remaining articles
+    const rest = items.slice(1);
+    if (rest.length === 0) {
+      gridSection.hidden = true;
+    } else {
+      gridSection.hidden = false;
+      rest.forEach((item, i) => {
+        const card = renderCard(item, i);
+        articlesGrid.appendChild(card);
+        io.observe(card);
+      });
+    }
+
+    // Count label
+    const n = items.length;
+    setCount(`${n} article${n !== 1 ? 's' : ''} published`);
+  }
+
+  // ─── Init & retry ────────────────────────────────────────────────────────────
+
+  async function init() {
+    errorState.hidden = true;
+    emptyState.hidden = true;
+
+    try {
+      const items = await fetchArticles();
+      render(items);
+    } catch (err) {
+      console.error('[Blog] Could not load articles:', err);
+      showError();
+    }
+  }
+
+  retryBtn?.addEventListener('click', () => {
+    errorState.hidden = true;
+    restoreSkeletons();
+    init();
   });
+
+  init();
+})();
