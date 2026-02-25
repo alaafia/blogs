@@ -14,7 +14,7 @@
 
   const MEDIUM_USERNAME = 'aichalaafia1';
   const FEED_URL        = `https://medium.com/feed/@${MEDIUM_USERNAME}`;
-  const FETCH_TIMEOUT   = 12_000; // ms
+  const FETCH_TIMEOUT   = 8000; // ms per proxy attempt
 
   // ─── DOM references ─────────────────────────────────────────────────────────
 
@@ -34,24 +34,25 @@
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
 
-  function withTimeout(promise, ms) {
+  /**
+   * fetch() with a real AbortController-backed timeout.
+   * The signal is passed directly to fetch so the request is actually cancelled.
+   */
+  function fetchWithTimeout(url, ms) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), ms);
-    // The signal is already passed inside each fetch call; here we just
-    // race the promise against a rejection after `ms` ms.
-    const timer = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out')), ms)
-    );
-    return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+    const timer = setTimeout(() => controller.abort(), ms);
+    return fetch(url, { signal: controller.signal })
+      .finally(() => clearTimeout(timer));
   }
 
   /**
-   * Primary: rss2json API (clean JSON, thumbnail already extracted).
-   * Returns an array of normalised article objects or throws.
+   * Primary: rss2json API — returns clean JSON including thumbnails & categories.
    */
   async function fetchViaRss2Json() {
-    const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(FEED_URL)}`;
-    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    // count=50 requests more items; Medium's native RSS caps at 10 anyway,
+    // but this prevents rss2json's own 10-item default from cutting us short.
+    const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(FEED_URL)}&count=50`;
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
     if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
     const data = await res.json();
     if (data.status !== 'ok' || !Array.isArray(data.items)) {
@@ -61,23 +62,48 @@
   }
 
   /**
-   * Fallback: allorigins proxy, returns raw RSS XML which we parse ourselves.
+   * Fallback 1: allorigins — returns raw RSS XML.
    */
   async function fetchViaAllorigins() {
     const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(FEED_URL)}`;
-    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
     if (!res.ok) throw new Error(`allorigins HTTP ${res.status}`);
     const xml  = await res.text();
     return parseRSSXML(xml);
   }
 
+  /**
+   * Fallback 2: corsproxy.io — another reliable CORS proxy for RSS/XML.
+   */
+  async function fetchViaCorsproxy() {
+    const url = `https://corsproxy.io/?${encodeURIComponent(FEED_URL)}`;
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
+    if (!res.ok) throw new Error(`corsproxy HTTP ${res.status}`);
+    const xml  = await res.text();
+    return parseRSSXML(xml);
+  }
+
   async function fetchArticles() {
-    try {
-      return await fetchViaRss2Json();
-    } catch (err) {
-      console.warn('[Blog] rss2json failed — falling back to allorigins.', err.message);
-      return await fetchViaAllorigins();
+    // Try each proxy in order; log failures and keep trying.
+    const proxies = [
+      ['rss2json',   fetchViaRss2Json],
+      ['allorigins', fetchViaAllorigins],
+      ['corsproxy',  fetchViaCorsproxy],
+    ];
+
+    let lastErr;
+    for (const [name, fn] of proxies) {
+      try {
+        const items = await fn();
+        console.log(`[Blog] Loaded via ${name} (${items.length} articles)`);
+        return items;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[Blog] ${name} failed:`, err.message);
+      }
     }
+
+    throw lastErr;
   }
 
   // ─── Normalisers ────────────────────────────────────────────────────────────
@@ -136,6 +162,22 @@
 
   // ─── Text utilities ─────────────────────────────────────────────────────────
 
+  /**
+   * Decode HTML entities using the browser's own parser.
+   * This is XSS-safe: we use a <textarea> (no script execution)
+   * and read back .value (plain text).
+   *
+   * rss2json returns titles/descriptions already HTML-encoded, e.g.
+   *   "Search &amp; Replace"
+   * Without this step, escapeHTML() would double-encode to "&amp;amp;"
+   * and the browser would display "&amp;" literally in the UI.
+   */
+  function decodeHTML(html) {
+    const el = document.createElement('textarea');
+    el.innerHTML = String(html || '');
+    return el.value;
+  }
+
   function stripHTML(html) {
     return html
       .replace(/<figure[\s\S]*?<\/figure>/gi, '') // remove images + captions
@@ -145,6 +187,7 @@
       .replace(/&gt;/g,   '>')
       .replace(/&quot;/g, '"')
       .replace(/&#039;/g, "'")
+      .replace(/&apos;/g, "'")
       .replace(/&nbsp;/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -237,8 +280,8 @@
       <div class="featured-card__body">
         <div class="featured-badge">Featured</div>
         ${pillsHTML(item.categories)}
-        <h2 class="featured-card__title">${escapeHTML(item.title)}</h2>
-        ${excerpt ? `<p class="featured-card__excerpt">${escapeHTML(excerpt)}</p>` : ''}
+        <h2 class="featured-card__title">${escapeHTML(decodeHTML(item.title))}</h2>
+        ${excerpt ? `<p class="featured-card__excerpt">${escapeHTML(decodeHTML(excerpt))}</p>` : ''}
         <div class="featured-card__footer">
           <div class="article-meta">
             ${date ? `<span>${date}</span><span class="meta-dot" aria-hidden="true"></span>` : ''}
@@ -282,8 +325,8 @@
       </div>
       <div class="card__body">
         ${pillsHTML(item.categories)}
-        <h3 class="card__title">${escapeHTML(item.title)}</h3>
-        ${excerpt ? `<p class="card__excerpt">${escapeHTML(excerpt)}</p>` : ''}
+        <h3 class="card__title">${escapeHTML(decodeHTML(item.title))}</h3>
+        ${excerpt ? `<p class="card__excerpt">${escapeHTML(decodeHTML(excerpt))}</p>` : ''}
         <div class="card__footer">
           <span class="card__meta">${date}${date && rt ? ' \u00B7 ' : ''}${rt}</span>
           <span class="card__arrow" aria-hidden="true">
@@ -315,7 +358,9 @@
   // ─── UI state helpers ────────────────────────────────────────────────────────
 
   function clearSkeletons() {
-    skeletonFeatured?.remove();
+    // Query fresh from the DOM — the cached `skeletonFeatured` reference goes
+    // stale after a retry (restoreSkeletons rebuilds it via innerHTML).
+    featuredSection.querySelector('.skeleton-featured')?.remove();
     articlesGrid.innerHTML = '';
   }
 
@@ -441,6 +486,49 @@
     errorState.hidden = true;
     restoreSkeletons();
     init();
+  });
+
+  // ─── Theme toggle ─────────────────────────────────────────────────────────────
+  //
+  // The <html data-theme="…"> attribute was already set by the inline <script>
+  // in <head> (reads localStorage / prefers-color-scheme) so there's no flash.
+  // Here we wire up the toggle buttons and keep their active state in sync.
+
+  const THEME_KEY   = 'blog-theme';
+  const htmlEl      = document.documentElement;
+  const themeToggle = document.getElementById('theme-toggle');
+  const themeOpts   = themeToggle
+    ? Array.from(themeToggle.querySelectorAll('.theme-opt'))
+    : [];
+
+  function syncToggleUI(theme) {
+    themeOpts.forEach(btn => {
+      btn.classList.toggle('is-active', btn.dataset.themeVal === theme);
+      btn.setAttribute('aria-pressed', String(btn.dataset.themeVal === theme));
+    });
+  }
+
+  function applyTheme(theme) {
+    htmlEl.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
+    syncToggleUI(theme);
+  }
+
+  // Initialise toggle UI to reflect the theme already applied by the inline script
+  syncToggleUI(htmlEl.getAttribute('data-theme') || 'dark');
+
+  // Enable smooth CSS transitions only after the first paint so the
+  // initial theme application (from the inline script) never animates.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      htmlEl.classList.add('theme-transitions');
+    });
+  });
+
+  themeOpts.forEach(btn => {
+    btn.addEventListener('click', () => {
+      applyTheme(btn.dataset.themeVal);
+    });
   });
 
   init();
