@@ -7,10 +7,10 @@
    DESIGN TOKENS
 ══════════════════════════════════════════════════════════════════ */
 :root {
-  /* Palette */
-  --c-bg:            #05091A;
-  --c-surface:       #0B1223;
-  --c-surface-hover: #101928;
+  /* Palette — default dark (midnight blue, not pitch-black) */
+  --c-bg:            #0D1628;
+  --c-surface:       #131E30;
+  --c-surface-hover: #182438;
   --c-border:        rgba(255, 255, 255, 0.06);
   --c-border-hover:  rgba(34, 211, 165, 0.28);
   --c-border-focus:  rgba(34, 211, 165, 0.6);
@@ -63,17 +63,24 @@
   padding: 0;
 }
 
+/*
+ * CRITICAL: the browser's user-agent [hidden]{display:none} has the same
+ * specificity as a class selector so any .class{display:flex} in author CSS
+ * beats it. This !important ensures hidden always wins.
+ */
+[hidden] { display: none !important; }
+
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
   /* Hard fallback so the page is never flash-white even before vars resolve */
-  background: #05091A;
+  background: #0D1628;
 }
 
 body {
   /* Hardcoded fallback first, then custom property override */
-  background-color: #05091A;
-  background-color: var(--c-bg, #05091A);
+  background-color: #0D1628;
+  background-color: var(--c-bg, #0D1628);
   color: #EEF2FF;
   color: var(--c-text, #EEF2FF);
   font-family: var(--f-body);
@@ -987,6 +994,150 @@ button {
   .featured-card__title {
     font-size: 1.35rem;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT THEME
+   Applied when <html data-theme="light"> (set by JS from localStorage
+   or prefers-color-scheme; inline script prevents any flash).
+══════════════════════════════════════════════════════════════════ */
+
+/* Re-map every token — all other rules use var() so they update for free */
+:root[data-theme="light"] {
+  --c-bg:            #F1F5FB;
+  --c-surface:       #FFFFFF;
+  --c-surface-hover: #EBF0F9;
+  --c-border:        rgba(10, 20, 60, 0.09);
+  --c-border-hover:  rgba(14, 155, 115, 0.38);
+  --c-border-focus:  rgba(14, 155, 115, 0.65);
+  --c-accent:        #0E9B73;          /* deeper emerald for WCAG contrast on white */
+  --c-accent-dim:    rgba(14, 155, 115, 0.10);
+  --c-accent-glow:   rgba(14, 155, 115, 0.05);
+  --c-accent-text:   #FFFFFF;
+  --c-text:          #0B1320;
+  --c-muted:         #506070;
+  --c-dim:           #9BAABB;
+  --shadow-sm:    0 2px 8px  rgba(0, 0, 0, 0.06);
+  --shadow-md:    0 8px 24px rgba(0, 0, 0, 0.09);
+  --shadow-lg:    0 20px 48px rgba(0, 0, 0, 0.13);
+  --shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.14),
+                  0 0 0 1px rgba(14, 155, 115, 0.2);
+}
+
+/* Override the hardcoded dark html background for light theme */
+:root[data-theme="light"] { background: var(--c-bg, #F1F5FB); }
+
+/* Adjust decorative layers to suit light backgrounds */
+:root[data-theme="light"] .bg-glow--tl {
+  background: radial-gradient(ellipse, rgba(14, 155, 115, 0.07) 0%, transparent 70%);
+}
+:root[data-theme="light"] .bg-glow--br {
+  background: radial-gradient(ellipse, rgba(99, 102, 241, 0.05) 0%, transparent 70%);
+}
+:root[data-theme="light"] .bg-grid {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.045) 1px, transparent 1px);
+}
+
+/* Skeleton shimmer — light variant */
+:root[data-theme="light"] .sk,
+:root[data-theme="light"] .skeleton-featured__img,
+:root[data-theme="light"] .skeleton-card__img {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.05) 20%,
+    rgba(0, 0, 0, 0.09) 50%,
+    rgba(0, 0, 0, 0.05) 80%
+  );
+  background-size: 800px 100%;
+}
+
+/* Image fallback placeholder — light variant */
+:root[data-theme="light"] .featured-card__img-fallback,
+:root[data-theme="light"] .card__img-fallback {
+  background: linear-gradient(135deg, #D8E4F2 0%, #C8D8EE 50%, #D4E0F0 100%);
+  color: rgba(14, 155, 115, 0.28);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   THEME TOGGLE  (pill with two segmented buttons in footer)
+══════════════════════════════════════════════════════════════════ */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-pill);
+  padding: 3px;
+  gap: 2px;
+}
+
+:root[data-theme="light"] .theme-toggle {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.theme-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--f-mono);
+  font-size: 0.63rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-muted);
+  background: none;
+  border: none;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast), box-shadow var(--t-fast);
+  white-space: nowrap;
+}
+
+.theme-opt.is-active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.18);
+}
+
+.theme-opt:hover:not(.is-active) {
+  color: var(--c-text);
+}
+
+.theme-opt:focus-visible {
+  outline: 2px solid var(--c-border-focus);
+  outline-offset: 1px;
+}
+
+/* Footer layout: 3-col on desktop (brand | toggle | links) */
+.site-footer__inner {
+  justify-content: space-between;
+}
+
+/* Smooth theme transitions — added to <html> by JS after first paint
+   so the initial load never flashes */
+.theme-transitions,
+.theme-transitions * {
+  transition:
+    background-color  0.28s ease,
+    background        0.28s ease,
+    border-color      0.28s ease,
+    color             0.28s ease,
+    box-shadow        0.28s ease !important;
+}
+
+/* But never animate transforms/opacity — those have their own animation */
+.theme-transitions .article-card,
+.theme-transitions .featured-card {
+  transition:
+    background-color  0.28s ease,
+    border-color      0.28s ease,
+    color             0.28s ease,
+    box-shadow        0.28s ease,
+    transform         0.32s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    opacity           0.5s ease !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════
