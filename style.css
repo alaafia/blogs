@@ -66,17 +66,23 @@
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+  /* Hard fallback so the page is never flash-white even before vars resolve */
+  background: #05091A;
 }
 
 body {
-  background-color: var(--c-bg);
-  color: var(--c-text);
+  /* Hardcoded fallback first, then custom property override */
+  background-color: #05091A;
+  background-color: var(--c-bg, #05091A);
+  color: #EEF2FF;
+  color: var(--c-text, #EEF2FF);
   font-family: var(--f-body);
   font-size: 16px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  min-height: 100vh;
   min-height: 100dvh;
 }
 

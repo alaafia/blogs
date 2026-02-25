@@ -14,7 +14,7 @@
 
   const MEDIUM_USERNAME = 'aichalaafia1';
   const FEED_URL        = `https://medium.com/feed/@${MEDIUM_USERNAME}`;
-  const FETCH_TIMEOUT   = 12_000; // ms
+  const FETCH_TIMEOUT   = 8000; // ms per proxy attempt
 
   // ─── DOM references ─────────────────────────────────────────────────────────
 
@@ -34,24 +34,23 @@
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
 
-  function withTimeout(promise, ms) {
+  /**
+   * fetch() with a real AbortController-backed timeout.
+   * The signal is passed directly to fetch so the request is actually cancelled.
+   */
+  function fetchWithTimeout(url, ms) {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), ms);
-    // The signal is already passed inside each fetch call; here we just
-    // race the promise against a rejection after `ms` ms.
-    const timer = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Request timed out')), ms)
-    );
-    return Promise.race([promise, timer]).finally(() => clearTimeout(id));
+    const timer = setTimeout(() => controller.abort(), ms);
+    return fetch(url, { signal: controller.signal })
+      .finally(() => clearTimeout(timer));
   }
 
   /**
-   * Primary: rss2json API (clean JSON, thumbnail already extracted).
-   * Returns an array of normalised article objects or throws.
+   * Primary: rss2json API — returns clean JSON including thumbnails & categories.
    */
   async function fetchViaRss2Json() {
     const url = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(FEED_URL)}`;
-    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
     if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
     const data = await res.json();
     if (data.status !== 'ok' || !Array.isArray(data.items)) {
@@ -61,23 +60,48 @@
   }
 
   /**
-   * Fallback: allorigins proxy, returns raw RSS XML which we parse ourselves.
+   * Fallback 1: allorigins — returns raw RSS XML.
    */
   async function fetchViaAllorigins() {
     const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(FEED_URL)}`;
-    const res  = await withTimeout(fetch(url), FETCH_TIMEOUT);
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
     if (!res.ok) throw new Error(`allorigins HTTP ${res.status}`);
     const xml  = await res.text();
     return parseRSSXML(xml);
   }
 
+  /**
+   * Fallback 2: corsproxy.io — another reliable CORS proxy for RSS/XML.
+   */
+  async function fetchViaCorsproxy() {
+    const url = `https://corsproxy.io/?${encodeURIComponent(FEED_URL)}`;
+    const res  = await fetchWithTimeout(url, FETCH_TIMEOUT);
+    if (!res.ok) throw new Error(`corsproxy HTTP ${res.status}`);
+    const xml  = await res.text();
+    return parseRSSXML(xml);
+  }
+
   async function fetchArticles() {
-    try {
-      return await fetchViaRss2Json();
-    } catch (err) {
-      console.warn('[Blog] rss2json failed — falling back to allorigins.', err.message);
-      return await fetchViaAllorigins();
+    // Try each proxy in order; log failures and keep trying.
+    const proxies = [
+      ['rss2json',   fetchViaRss2Json],
+      ['allorigins', fetchViaAllorigins],
+      ['corsproxy',  fetchViaCorsproxy],
+    ];
+
+    let lastErr;
+    for (const [name, fn] of proxies) {
+      try {
+        const items = await fn();
+        console.log(`[Blog] Loaded via ${name} (${items.length} articles)`);
+        return items;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[Blog] ${name} failed:`, err.message);
+      }
     }
+
+    throw lastErr;
   }
 
   // ─── Normalisers ────────────────────────────────────────────────────────────
@@ -315,7 +339,9 @@
   // ─── UI state helpers ────────────────────────────────────────────────────────
 
   function clearSkeletons() {
-    skeletonFeatured?.remove();
+    // Query fresh from the DOM — the cached `skeletonFeatured` reference goes
+    // stale after a retry (restoreSkeletons rebuilds it via innerHTML).
+    featuredSection.querySelector('.skeleton-featured')?.remove();
     articlesGrid.innerHTML = '';
   }
 
